@@ -54,6 +54,11 @@ def _log(msg: str, log_callback=None):
     else:
         print(msg)
 
+def _update_progress(current: int, total: int, message: str = "", progress_callback=None):
+    """Send progress update to UI if callback is available."""
+    if progress_callback:
+        progress_callback(current, total, message)
+
 # Internet
 def is_connected():
     try:
@@ -446,7 +451,7 @@ def process_text_file(file_path: pathlib.Path, drive_service, text_splitter, mod
     # Store in the text collection
     store_text_embeddings(text_embeddings, prefixed_chunks, str(file_path), collections, percentage_completed, log_callback)
         
-def process_image_batch(file_paths: List[pathlib.Path], models, collections, batch_size, log_callback, cancel_event):
+def process_image_batch(file_paths: List[pathlib.Path], models, collections, batch_size, log_callback, cancel_event, progress_callback=None):
     """Given a list of all file paths, breaks it up into batches, gets embeddings for the batch, and stores them. Batching improves speed and efficiency."""
     if not file_paths:
         return
@@ -465,6 +470,10 @@ def process_image_batch(file_paths: List[pathlib.Path], models, collections, bat
             return
             
         percentage_completed = ((i + 1) / len(all_image_batches)) * 100
+        
+        # Update progress for images (75-85%)
+        img_progress = 75 + int(((i + 1) / len(all_image_batches)) * 10)
+        _update_progress(img_progress, 100, f"Processing images {i + 1}/{len(all_image_batches)} batches", progress_callback)
 
         # Store in the image collection
         store_image_embeddings(image_embeddings, successful_file_paths, collections, percentage_completed, log_callback)
@@ -532,7 +541,7 @@ def create_keyword_index(collections, log_callback=None):
         _log(f"[Error] Failed to build image BM25 index: {e}", log_callback)
 
 # First major function
-def sync_directory(drive_service, text_splitter, models, collections, config, cancel_event=None, log_callback=None):
+def sync_directory(drive_service, text_splitter, models, collections, config, cancel_event=None, log_callback=None, progress_callback=None):
     """Scans one or more directories and syncs them with the ChromaDB collection by adding, updating, and deleting files as needed."""
     # Support both single directory (string) and multiple directories (list)
     target_dirs = config.get('target_directories', [])
@@ -576,11 +585,15 @@ def sync_directory(drive_service, text_splitter, models, collections, config, ca
 
     local_files = {}
     # Scan all target directories
-    for root_path in valid_dirs:
+    _update_progress(0, 100, "Scanning directories...", progress_callback)
+    for dir_idx, root_path in enumerate(valid_dirs):
         _log(f"Scanning directory: {root_path}", log_callback)
         for p in root_path.rglob('*'):
             if p.is_file():
                 local_files[str(p)] = p.stat().st_mtime
+        # Update progress for directory scanning (0-10%)
+        scan_progress = int(((dir_idx + 1) / len(valid_dirs)) * 10)
+        _update_progress(scan_progress, 100, f"Scanned {dir_idx + 1}/{len(valid_dirs)} directories", progress_callback)
 
     # Include saved insights
     if insights_dir.exists():
@@ -592,6 +605,7 @@ def sync_directory(drive_service, text_splitter, models, collections, config, ca
         _log(f"No saved insights folder found at: {insights_dir}", log_callback)
 
     _log(f"Total number of files found: {len(local_files)}", log_callback)
+    _update_progress(15, 100, f"Found {len(local_files)} files", progress_callback)
 
     db_files = {}
     # Iterate over each collection (e.g., 'text', 'image') in the dictionary
@@ -609,6 +623,7 @@ def sync_directory(drive_service, text_splitter, models, collections, config, ca
                     db_files[path] = mdata.get('last_modified', 0)
 
     _log(f"Total number of synced files in collection: {len(db_files)}", log_callback)
+    _update_progress(20, 100, "Comparing files...", progress_callback)
 
     local_set = set(local_files.keys())
     db_set = set(db_files.keys())
@@ -624,7 +639,8 @@ def sync_directory(drive_service, text_splitter, models, collections, config, ca
     # DELETE FILES
     if files_to_delete + files_to_update:  # Delete files to update before re-adding them
         _log(f"Deleting {len(files_to_delete)} files from database...", log_callback)
-        for path_str in files_to_delete:
+        _update_progress(25, 100, f"Deleting {len(files_to_delete)} files...", progress_callback)
+        for idx, path_str in enumerate(files_to_delete):
             if cancel_event and cancel_event.is_set():
                 _log("✖ Sync canceled by user.", log_callback)
                 break
@@ -632,6 +648,10 @@ def sync_directory(drive_service, text_splitter, models, collections, config, ca
             for collection in collections.values():
                 collection.delete(where={"source_file": path_str})
             _log(f"➔ Deleted: {path_obj.name}", log_callback)
+            # Update progress for deletions (25-30%)
+            if idx % max(1, len(files_to_delete) // 10) == 0:
+                del_progress = 25 + int(((idx + 1) / len(files_to_delete)) * 5)
+                _update_progress(del_progress, 100, f"Deleting {idx + 1}/{len(files_to_delete)}", progress_callback)
 
     # PROCESS FILES - ADD AND UPDATE
     text_files_to_process = []
@@ -659,18 +679,24 @@ def sync_directory(drive_service, text_splitter, models, collections, config, ca
 
     if text_files_to_process:
         _log(f"Processing {len(text_files_to_process)} text files...", log_callback)
+        _update_progress(30, 100, f"Processing text files...", progress_callback)
         for i, path_obj in enumerate(text_files_to_process):
             if cancel_event and cancel_event.is_set():
                 _log("✖ Sync canceled by user.", log_callback)
                 break
             # To display progress:
             percentage_completed = ((i + 1) / len(text_files_to_process)) * 100
+            # Update progress for text files (30-70%)
+            text_progress = 30 + int(((i + 1) / len(text_files_to_process)) * 40)
+            _update_progress(text_progress, 100, f"Processing text {i + 1}/{len(text_files_to_process)}", progress_callback)
             process_text_file(path_obj, drive_service, text_splitter, models, is_multimodal, collections, config['batch_size'], percentage_completed, log_callback)
     else:
         _log("No new or updated text files to process.", log_callback)
+        _update_progress(70, 100, "No text files to process", progress_callback)
 
     if not collections['image'].get(where={"type":"label"})['ids']:
         _log(f"Creating image classifiers...", log_callback)
+        _update_progress(70, 100, "Creating image classifiers...", progress_callback)
         classifier_labels = [label.lower() for label in CANDIDATE_LABELS]
         create_image_classifiers(classifier_labels, models['image'], collections['image'], config['batch_size'], log_callback)
     else:
@@ -678,14 +704,18 @@ def sync_directory(drive_service, text_splitter, models, collections, config, ca
     
     if image_files_to_process:
         _log(f"Processing {len(image_files_to_process)} image files...", log_callback)
-        process_image_batch(image_files_to_process, models, collections, config['batch_size'], log_callback, cancel_event)
+        _update_progress(75, 100, f"Processing {len(image_files_to_process)} images...", progress_callback)
+        process_image_batch(image_files_to_process, models, collections, config['batch_size'], log_callback, cancel_event, progress_callback)
     else:
         _log("No new or updated images to process.", log_callback)
+        _update_progress(85, 100, "No images to process", progress_callback)
 
     # BM25 INDEXING FOR LEXICAL SEARCH
+    _update_progress(90, 100, "Building search index...", progress_callback)
     create_keyword_index(collections, log_callback)
 
     # Done.
+    _update_progress(100, 100, "Sync complete!", progress_callback)
     end_time = time.perf_counter()
     _log(f"Syncing took {(end_time - start_time):.4f} seconds.", log_callback)
     _log(f"{collections['text'].count()} text chunks in the collection", log_callback)

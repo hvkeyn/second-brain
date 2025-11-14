@@ -354,12 +354,23 @@ class App:
         self.chat_list = ft.ListView(expand=True, spacing=10, auto_scroll=False, padding=ft.padding.only(left=10, right=10, top=3))
         # Attachment display (starts invisible)
         self.attachment_display = ft.Text(visible=False, italic=True)
+        # Progress bar for sync and search operations (starts invisible)
+        self.progress_text = ft.Text(value="", size=12, italic=True)
+        self.progress_bar = ft.ProgressBar(width=400, value=0, visible=False)
+        self.progress_container = ft.Container(
+            content=ft.Column([
+                self.progress_text,
+                self.progress_bar
+            ], spacing=5, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+            visible=False,
+            padding=10
+        )
         # Settings view button
         self.show_settings_btn = ft.IconButton(tooltip="Hide Buttons", icon=ft.Icons.TUNE_OUTLINED, on_click=self.toggle_settings_view)
         # Bottom row
         self.bottom_row = ft.Row([self.show_settings_btn, self.user_input, self.attach_button, self.send_button], alignment="spaceBetween")
         # MAIN COLUMN
-        main_layout = ft.Column(controls=[self.buttons_row, self.chat_list, self.attachment_display, self.bottom_row], expand=True)
+        main_layout = ft.Column(controls=[self.buttons_row, self.chat_list, self.progress_container, self.attachment_display, self.bottom_row], expand=True)
         # We wrap the layout in a Container to give the app some nice spacing.
         padded_layout = ft.Container(content=main_layout, padding=20, expand=True)
         # Animated loading indicator
@@ -561,6 +572,31 @@ class App:
             self.cancel_sync_event.set()
             self.page.update()
 
+    def update_progress(self, current, total, message=""):
+        """Update progress bar during sync or search operations."""
+        try:
+            if total > 0:
+                self.progress_bar.value = current / total
+                self.progress_bar.visible = True
+                self.progress_text.value = f"{message} ({current}%)"
+                self.progress_container.visible = True
+            else:
+                self.progress_bar.value = 0
+                self.progress_bar.visible = True
+                self.progress_text.value = message
+                self.progress_container.visible = True
+            self.page.update()
+        except Exception as e:
+            print(f"Progress update error: {e}")
+    
+    def hide_progress(self):
+        """Hide progress bar after operation completes."""
+        self.progress_container.visible = False
+        self.progress_bar.visible = False
+        self.progress_bar.value = 0
+        self.progress_text.value = ""
+        self.page.update()
+
     def sync_worker(self):
         try:
             # The function itself + helper
@@ -570,11 +606,22 @@ class App:
                 from SecondBrainBackend import get_drive_service
                 # Reload drive service if token.json is missing
                 self.drive_service = get_drive_service(self.log, self.config)
-            # Start the sync itself! Pass cancel_sync_event
-            sync_directory(self.drive_service, self.text_splitter, self.models, self.collections, self.config, cancel_event=self.cancel_sync_event, log_callback=self.log)
+            # Start the sync itself! Pass cancel_sync_event and progress callback
+            sync_directory(
+                self.drive_service, 
+                self.text_splitter, 
+                self.models, 
+                self.collections, 
+                self.config, 
+                cancel_event=self.cancel_sync_event, 
+                log_callback=self.log,
+                progress_callback=self.update_progress
+            )
         except Exception as e:
             self.log(f"Sync failed: {e}")
         finally:
+            # Hide progress bar
+            self.hide_progress()
             # After the sync is done, reset to starting positions.
             self.sync_running = False
             self.reload_backend_btn.disabled = False
@@ -779,21 +826,29 @@ class App:
                 attachment_context_string = f"The user has attached an image: {searchfacts.attachment_path.name}"  # This copies the formatting found in the LLM class for the image prompt. It essentially lets the LLM know which image is the attachment.
         # parts of image_search_results and image_paths will be used for llm_synthesize_results
         try:
+            self.update_progress(10, 100, "Searching images...")
             searchfacts = self._handle_image_search(searchfacts, results_column)  # In-place operation
         except Exception as e:
             results_column.controls.append(ft.Text(f"[ERROR] Image search failed: {e}", selectable=True))
             searchfacts.image_search_results, searchfacts.image_paths = [], []
         # parts of text_search_results will be used for llm_synthesize_results
         try:
+            self.update_progress(40, 100, "Searching text...")
             searchfacts = self._handle_text_search(searchfacts, results_column)  # In-place operation
         except Exception as e:
             results_column.controls.append(ft.Text(f"[ERROR] Text search failed: {e}", selectable=True))
             searchfacts.text_search_results = []
         # llm_synthesize_results - LLM takes results and summarizes and gives insight on them
         try:
+            self.update_progress(70, 100, "Generating AI insights...")
             self._handle_ai_insights(searchfacts, results_column)
         except Exception as e:
             results_column.controls.append(ft.Text(f"[ERROR] AI insight generation failed: {e}", selectable=True))
+        finally:
+            self.update_progress(100, 100, "Search complete!")
+            import time
+            time.sleep(0.5)  # Show completion briefly
+            self.hide_progress()
         # --- Final Cleanup ---
         self.chat_list.scroll_to(key=scroll_key, duration=100)  # Scroll to user's message
         self.send_button.icon = original_icon
