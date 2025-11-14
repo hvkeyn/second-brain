@@ -43,6 +43,7 @@ chroma_db/
 token.json
 credentials.json
 saved_insights/
+sync_state.json
 *.pkl
 
 # Logs

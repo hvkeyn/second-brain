@@ -59,6 +59,62 @@ def _update_progress(current: int, total: int, message: str = "", progress_callb
     if progress_callback:
         progress_callback(current, total, message)
 
+def _save_sync_state(files_to_add: list, files_to_update: list, phase: str, log_callback=None):
+    """Save current sync state for resume capability."""
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        state_file = os.path.join(base_dir, "sync_state.json")
+        
+        state = {
+            "phase": phase,
+            "files_to_add": files_to_add,
+            "files_to_update": files_to_update,
+            "timestamp": time.time()
+        }
+        
+        with open(state_file, 'w') as f:
+            json.dump(state, f, indent=2)
+        
+        _log(f"Sync state saved. Resume available.", log_callback)
+    except Exception as e:
+        _log(f"[Warning] Could not save sync state: {e}", log_callback)
+
+def _load_sync_state(log_callback=None):
+    """Load saved sync state if available."""
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        state_file = os.path.join(base_dir, "sync_state.json")
+        
+        if not os.path.exists(state_file):
+            return None
+        
+        with open(state_file, 'r') as f:
+            state = json.load(f)
+        
+        # Check if state is recent (within last 24 hours)
+        age_hours = (time.time() - state.get("timestamp", 0)) / 3600
+        if age_hours > 24:
+            _log("Sync state too old, starting fresh sync.", log_callback)
+            os.remove(state_file)
+            return None
+        
+        _log(f"Found previous sync state from {age_hours:.1f} hours ago.", log_callback)
+        return state
+    except Exception as e:
+        _log(f"[Warning] Could not load sync state: {e}", log_callback)
+        return None
+
+def _clear_sync_state(log_callback=None):
+    """Clear sync state after successful completion."""
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        state_file = os.path.join(base_dir, "sync_state.json")
+        
+        if os.path.exists(state_file):
+            os.remove(state_file)
+    except Exception as e:
+        _log(f"[Warning] Could not clear sync state: {e}", log_callback)
+
 # Internet
 def is_connected():
     try:
@@ -577,105 +633,136 @@ def sync_directory(drive_service, text_splitter, models, collections, config, ca
     base_dir = os.path.dirname(os.path.abspath(__file__))
     insights_dir = pathlib.Path(base_dir) / "saved_insights"
 
-    _log(f"Starting sync for {len(valid_dirs)} director{'ies' if len(valid_dirs) > 1 else 'y'}:", log_callback)
-    for dir_path in valid_dirs:
-        _log(f"  - {dir_path}", log_callback)
-    _log("(This may take a while. A few glitches are to be expected. Don't move any files while syncing.)", log_callback)
+    # Check for previous sync state (resume capability)
+    saved_state = _load_sync_state(log_callback)
+    resume_mode = saved_state is not None
+    
+    if resume_mode:
+        _log("🔄 Resuming previous sync...", log_callback)
+        files_to_add = saved_state.get("files_to_add", [])
+        files_to_update = saved_state.get("files_to_update", [])
+        
+        # Convert strings back to Path objects
+        files_to_process = [pathlib.Path(f) for f in files_to_add + files_to_update]
+        
+        _log(f"Resuming with {len(files_to_process)} files remaining", log_callback)
+        _update_progress(30, 100, f"Resuming: {len(files_to_process)} files left", progress_callback)
+        
+        # Skip to file processing phase
+        text_files_to_process = []
+        image_files_to_process = []
+        is_multimodal = models['image']
+        
+        for path_obj in files_to_process:
+            handler = file_handler(path_obj.suffix, is_multimodal)
+            if handler == parse_image:
+                image_files_to_process.append(path_obj)
+            elif handler:
+                text_files_to_process.append(path_obj)
+        
+        # Jump to processing (skip scanning and comparison)
+        files_to_delete = []
+    else:
+        # Normal sync start
+        _log(f"Starting sync for {len(valid_dirs)} director{'ies' if len(valid_dirs) > 1 else 'y'}:", log_callback)
+        for dir_path in valid_dirs:
+            _log(f"  - {dir_path}", log_callback)
+        _log("(This may take a while. A few glitches are to be expected. Don't move any files while syncing.)", log_callback)
+    
     start_time = time.perf_counter()
 
-    local_files = {}
-    # Scan all target directories
-    _update_progress(0, 100, "Scanning directories...", progress_callback)
-    for dir_idx, root_path in enumerate(valid_dirs):
-        _log(f"Scanning directory: {root_path}", log_callback)
-        for p in root_path.rglob('*'):
-            if p.is_file():
-                local_files[str(p)] = p.stat().st_mtime
-        # Update progress for directory scanning (0-10%)
-        scan_progress = int(((dir_idx + 1) / len(valid_dirs)) * 10)
-        _update_progress(scan_progress, 100, f"Scanned {dir_idx + 1}/{len(valid_dirs)} directories", progress_callback)
+    if not resume_mode:
+        local_files = {}
+        # Scan all target directories
+        _update_progress(0, 100, "Scanning directories...", progress_callback)
+        for dir_idx, root_path in enumerate(valid_dirs):
+            _log(f"Scanning directory: {root_path}", log_callback)
+            for p in root_path.rglob('*'):
+                if p.is_file():
+                    local_files[str(p)] = p.stat().st_mtime
+            # Update progress for directory scanning (0-10%)
+            scan_progress = int(((dir_idx + 1) / len(valid_dirs)) * 10)
+            _update_progress(scan_progress, 100, f"Scanned {dir_idx + 1}/{len(valid_dirs)} directories", progress_callback)
 
-    # Include saved insights
-    if insights_dir.exists():
-        for p in insights_dir.rglob('*'):
-            if p.is_file():
-                local_files[str(p)] = p.stat().st_mtime
-        _log(f"Included saved insights from: {insights_dir}", log_callback)
-    else:
-        _log(f"No saved insights folder found at: {insights_dir}", log_callback)
+        # Include saved insights
+        if insights_dir.exists():
+            for p in insights_dir.rglob('*'):
+                if p.is_file():
+                    local_files[str(p)] = p.stat().st_mtime
+            _log(f"Included saved insights from: {insights_dir}", log_callback)
+        else:
+            _log(f"No saved insights folder found at: {insights_dir}", log_callback)
 
-    _log(f"Total number of files found: {len(local_files)}", log_callback)
-    _update_progress(15, 100, f"Found {len(local_files)} files", progress_callback)
+        _log(f"Total number of files found: {len(local_files)}", log_callback)
+        _update_progress(15, 100, f"Found {len(local_files)} files", progress_callback)
 
-    db_files = {}
-    # Iterate over each collection (e.g., 'text', 'image') in the dictionary
-    for collection_name, collection_obj in collections.items():
-        # print(f"Checking existing files in '{collection_name}' collection...")
-        results = collection_obj.get(include=['metadatas'])  # Checking last modified time for updates
-        if 'metadatas' in results and results['metadatas']:
-            for mdata in results['metadatas']:
-                path = mdata.get('source_file')
-                if path is None:
-                    continue # Skips this iteration for labels (and anything else with source_file=None)
-                # Only add if not already present. This correctly merges the file lists
-                # from both text and image collections into one master list.
-                if path not in db_files:
-                    db_files[path] = mdata.get('last_modified', 0)
+        db_files = {}
+        # Iterate over each collection (e.g., 'text', 'image') in the dictionary
+        for collection_name, collection_obj in collections.items():
+            results = collection_obj.get(include=['metadatas'])  # Checking last modified time for updates
+            if 'metadatas' in results and results['metadatas']:
+                for mdata in results['metadatas']:
+                    path = mdata.get('source_file')
+                    if path is None:
+                        continue # Skips this iteration for labels (and anything else with source_file=None)
+                    if path not in db_files:
+                        db_files[path] = mdata.get('last_modified', 0)
 
-    _log(f"Total number of synced files in collection: {len(db_files)}", log_callback)
-    _update_progress(20, 100, "Comparing files...", progress_callback)
+        _log(f"Total number of synced files in collection: {len(db_files)}", log_callback)
+        _update_progress(20, 100, "Comparing files...", progress_callback)
 
-    local_set = set(local_files.keys())
-    db_set = set(db_files.keys())
-    
-    files_to_add = list(local_set - db_set)  # Files to add: in local but not in DB
-    files_to_delete = list(db_set - local_set)  # Files to delete: in DB but not in local
-    files_to_update = []  # Files to check for updates: in both
-    for path in local_set.intersection(db_set):
-        # Use math.isclose for safer float comparison of timestamps
-        if not math.isclose(local_files[path], db_files[path]):  # Compare last modified times
-            files_to_update.append(path)
+        local_set = set(local_files.keys())
+        db_set = set(db_files.keys())
+        
+        files_to_add = list(local_set - db_set)  # Files to add: in local but not in DB
+        files_to_delete = list(db_set - local_set)  # Files to delete: in DB but not in local
+        files_to_update = []  # Files to check for updates: in both
+        for path in local_set.intersection(db_set):
+            # Use math.isclose for safer float comparison of timestamps
+            if not math.isclose(local_files[path], db_files[path]):  # Compare last modified times
+                files_to_update.append(path)
 
-    # DELETE FILES
-    if files_to_delete + files_to_update:  # Delete files to update before re-adding them
-        _log(f"Deleting {len(files_to_delete)} files from database...", log_callback)
-        _update_progress(25, 100, f"Deleting {len(files_to_delete)} files...", progress_callback)
-        for idx, path_str in enumerate(files_to_delete):
+        # DELETE FILES
+        if files_to_delete + files_to_update:  # Delete files to update before re-adding them
+            _log(f"Deleting {len(files_to_delete)} files from database...", log_callback)
+            _update_progress(25, 100, f"Deleting {len(files_to_delete)} files...", progress_callback)
+            for idx, path_str in enumerate(files_to_delete):
+                if cancel_event and cancel_event.is_set():
+                    _log("✖ Sync canceled by user.", log_callback)
+                    _save_sync_state(files_to_add, files_to_update, "deletion_phase", log_callback)
+                    return  # Exit immediately
+                path_obj = pathlib.Path(path_str)
+                for collection in collections.values():
+                    collection.delete(where={"source_file": path_str})
+                _log(f"➔ Deleted: {path_obj.name}", log_callback)
+                # Update progress for deletions (25-30%)
+                if idx % max(1, len(files_to_delete) // 10) == 0:
+                    del_progress = 25 + int(((idx + 1) / len(files_to_delete)) * 5)
+                    _update_progress(del_progress, 100, f"Deleting {idx + 1}/{len(files_to_delete)}", progress_callback)
+
+        # PROCESS FILES - ADD AND UPDATE
+        text_files_to_process = []
+        image_files_to_process = []
+        files_to_process = files_to_add + files_to_update
+
+        is_multimodal = models['image']
+        unsupported_counter = 0
+        for path_str in files_to_process:
             if cancel_event and cancel_event.is_set():
                 _log("✖ Sync canceled by user.", log_callback)
-                break
+                _save_sync_state(files_to_add, files_to_update, "categorizing_files", log_callback)
+                return  # Exit immediately
+            
             path_obj = pathlib.Path(path_str)
-            for collection in collections.values():
-                collection.delete(where={"source_file": path_str})
-            _log(f"➔ Deleted: {path_obj.name}", log_callback)
-            # Update progress for deletions (25-30%)
-            if idx % max(1, len(files_to_delete) // 10) == 0:
-                del_progress = 25 + int(((idx + 1) / len(files_to_delete)) * 5)
-                _update_progress(del_progress, 100, f"Deleting {idx + 1}/{len(files_to_delete)}", progress_callback)
 
-    # PROCESS FILES - ADD AND UPDATE
-    text_files_to_process = []
-    image_files_to_process = []
-
-    files_to_process = files_to_add + files_to_update
-
-    is_multimodal = models['image']
-    unsupported_counter = 0
-    for path_str in files_to_process:
-        if cancel_event and cancel_event.is_set():
-            _log("✖ Sync canceled by user.", log_callback)
-            break
-        
-        path_obj = pathlib.Path(path_str)
-
-        handler = file_handler(path_obj.suffix, is_multimodal)
-        if handler == parse_image:
-            image_files_to_process.append(path_obj)  # To get images from PDFs, need to pass .pdf files to here *and* text_files_to_process; if handler == parse_pdf...
-        elif handler:
-            text_files_to_process.append(path_obj)
-        else:
-            unsupported_counter += 1
-    _log(f"Total unsupported files: {unsupported_counter}", log_callback)
+            handler = file_handler(path_obj.suffix, is_multimodal)
+            if handler == parse_image:
+                image_files_to_process.append(path_obj)
+            elif handler:
+                text_files_to_process.append(path_obj)
+            else:
+                unsupported_counter += 1
+        _log(f"Total unsupported files: {unsupported_counter}", log_callback)
 
     if text_files_to_process:
         _log(f"Processing {len(text_files_to_process)} text files...", log_callback)
@@ -683,13 +770,22 @@ def sync_directory(drive_service, text_splitter, models, collections, config, ca
         for i, path_obj in enumerate(text_files_to_process):
             if cancel_event and cancel_event.is_set():
                 _log("✖ Sync canceled by user.", log_callback)
-                break
+                # Save remaining files for resume
+                remaining_text = text_files_to_process[i:]
+                remaining_images = image_files_to_process
+                _save_sync_state([str(f) for f in remaining_text + remaining_images], [], "processing_files", log_callback)
+                return  # Exit immediately
             # To display progress:
             percentage_completed = ((i + 1) / len(text_files_to_process)) * 100
             # Update progress for text files (30-70%)
             text_progress = 30 + int(((i + 1) / len(text_files_to_process)) * 40)
             _update_progress(text_progress, 100, f"Processing text {i + 1}/{len(text_files_to_process)}", progress_callback)
             process_text_file(path_obj, drive_service, text_splitter, models, is_multimodal, collections, config['batch_size'], percentage_completed, log_callback)
+            
+            # Save state every 10 files for crash recovery
+            if i % 10 == 0:
+                remaining = [str(f) for f in text_files_to_process[i+1:] + image_files_to_process]
+                _save_sync_state(remaining, [], "processing_files", log_callback)
     else:
         _log("No new or updated text files to process.", log_callback)
         _update_progress(70, 100, "No text files to process", progress_callback)
@@ -716,12 +812,13 @@ def sync_directory(drive_service, text_splitter, models, collections, config, ca
 
     # Done.
     _update_progress(100, 100, "Sync complete!", progress_callback)
+    _clear_sync_state(log_callback)  # Clear saved state after successful completion
     end_time = time.perf_counter()
     _log(f"Syncing took {(end_time - start_time):.4f} seconds.", log_callback)
     _log(f"{collections['text'].count()} text chunks in the collection", log_callback)
     num_images = len(collections['image'].get(where={"type": "image"}, include=[])["ids"])
     _log(f"{num_images} images in the collection", log_callback)
-    _log(f"Sync complete.", log_callback)
+    _log(f"✓ Sync complete.", log_callback)
 
 def mmr_rerank_hybrid(
         results: List[Dict[str, Any]], 
