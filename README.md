@@ -84,20 +84,65 @@ This CSV is used as a pool for possible image labels. The image labels are chose
 
 ### 1. Prerequisites
 Before running the application, ensure you have the following:
-   - Python: Second Brain requires Python 3.9 or higher.
-   - LM Studio: To use AI Mode with a local LLM, you must download and install LM Studio with a .gguf model, ideally with vision capabilities (unsloth/gemma-3-4b-it works well, but any model may be used).
-   - Open AI API: To use a model from the OpenAI API, make sure you have an API key from platform.openai.com with sufficient funds.
-   - Dependencies: Install the required Python libraries (see below - dependencies) using pip.
-   - System requirements: The search engine can be used with GPU or CPU. It will automatically detect if a GPU exists and use it if available. Different text and image embedding models use different amounts of memory, and can be configured. For example, the default models use 2GB of VRAM/RAM.
-### 2. Installation
-Download ```SecondBrainBackend```, ```SecondBrainFrontend```, ```config.json```, and ```image_labels.csv``` from this repository. Only these four files are needed. Not bad, right? Place them in a folder. 
-**---Note: An installer is in the works!---**
-### 3. Configuration
+   - **Python 3.9 or higher** - [Download Python](https://www.python.org/) (Make sure to check "Add Python to PATH" during installation)
+   - **LM Studio** (optional, for local AI): Download and install [LM Studio](https://lmstudio.ai/) with a .gguf model, ideally with vision capabilities (unsloth/gemma-3-4b-it works well, but any model may be used).
+   - **OpenAI API** (optional, for cloud AI): Make sure you have an API key from [platform.openai.com](https://platform.openai.com/) with sufficient funds.
+   - **System requirements**: The search engine can be used with GPU or CPU. It will automatically detect if a GPU exists and use it if available. Different text and image embedding models use different amounts of memory, and can be configured. For example, the default models use 2GB of VRAM/RAM.
+
+### 2. Quick Installation & Launch 🚀
+
+**NEW: Automatic Setup Scripts!**
+
+After downloading the repository, simply run the appropriate script for your system:
+
+#### Windows (PowerShell - recommended):
+```powershell
+.\setup_and_run.ps1
+```
+*If you get an ExecutionPolicy error, run:*
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+#### Windows (Command Prompt):
+```cmd
+setup_and_run.bat
+```
+
+#### Linux / macOS:
+```bash
+chmod +x setup_and_run.sh  # Make executable (first time only)
+./setup_and_run.sh
+```
+
+The script will automatically:
+- ✅ Check for Python 3.9+
+- ✅ Verify all required files are present
+- ✅ Create a virtual environment
+- ✅ Install all dependencies
+- ✅ Launch the application
+
+**First run** may take 5-15 minutes to download dependencies (~2-3 GB).
+**Subsequent runs** will be much faster - just run the same script again!
+
+### 3. Manual Installation (if automatic setup fails)
+
+Download ```SecondBrainBackend.py```, ```SecondBrainFrontend.py```, ```config.json```, ```image_labels.csv``` and ```requirements.txt``` from this repository. Place them in a folder.
+
+Then install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+And run:
+```bash
+python SecondBrainFrontend.py
+```
+
+### 4. Configuration
 Open ```config.json``` and update the <mark>target_directory</mark> to point to the folder you want to use as your knowledge base.
 
 (Optional - skip if irrelevant) To enable Google Doc syncing, follow the [Google Cloud API](https://developers.google.com/workspace/drive/api/guides/about-sdk) instructions to get a ```credentials.json``` file using OAuth. Either place the file in the project directory, or place it somewhere else and update <mark>credentials_path</mark> in ```config.json``` to point to it. The first time you sync, a browser window will open for you to authorize the application. Authentication is very finnicky and it might be necessary to delete the authorization token (```token.json```) and then reauthorize to get Drive syncing to work. You can do this with the "Reauthorize Drive" button.
-### 4. Running the application
-To start the application, run **SecondBrainFrontend.py** from the project folder. During the first run, it may take a while to download the models.
 
 ---
 
@@ -160,9 +205,11 @@ config.json
 
 ## Dependencies
 
-*You can install the Python dependencies with the following command:*
+All Python dependencies are listed in ```requirements.txt```:
 
-```pip install requests PyMuPDF chromadb python-docx rank_bm25 flet numpy Pillow langchain_core transformers sentence-transformers scipy langchain-text-splitters openai lmstudio google-auth-oauthlib google-api-python-client torch```
+```pip install -r requirements.txt```
+
+**OR** simply run ```setup_and_run.bat``` to install everything automatically.
 
    requests  
    PyMuPDF  
