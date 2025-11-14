@@ -1,6 +1,8 @@
 {
     "credentials_path": "credentials.json",
-    "target_directory": "C:\\Users\\user\\My Drive",
+    "target_directories": [
+        "C:\\Users\\user\\My Drive"
+    ],
     "text_model_name": "BAAI/bge-large-en-v1.5",
     "image_model_name": "clip-ViT-B-16",
     "embed_use_cuda": true,

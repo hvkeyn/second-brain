@@ -533,28 +533,56 @@ def create_keyword_index(collections, log_callback=None):
 
 # First major function
 def sync_directory(drive_service, text_splitter, models, collections, config, cancel_event=None, log_callback=None):
-    """Scans a directory and syncs it with the ChromaDB collection by adding, updating, and deleting files as needed."""
-    root_path = pathlib.Path(config['target_directory'])
-    if not os.path.exists(root_path):
-        _log(f"[Error] '{root_path}' does not exist. It may be misspelled.", log_callback)
+    """Scans one or more directories and syncs them with the ChromaDB collection by adding, updating, and deleting files as needed."""
+    # Support both single directory (string) and multiple directories (list)
+    target_dirs = config.get('target_directories', [])
+    if not target_dirs:
+        # Fallback to old single directory config for backward compatibility
+        old_dir = config.get('target_directory')
+        if old_dir:
+            target_dirs = [old_dir]
+        else:
+            _log("[Error] No target directories configured. Please set 'target_directories' in config.json", log_callback)
+            return
+    
+    # Ensure target_dirs is a list
+    if isinstance(target_dirs, str):
+        target_dirs = [target_dirs]
+    
+    # Validate all directories exist
+    valid_dirs = []
+    for dir_path in target_dirs:
+        root_path = pathlib.Path(dir_path)
+        if not os.path.exists(root_path):
+            _log(f"[Warning] '{root_path}' does not exist. Skipping.", log_callback)
+            continue
+        if not root_path.is_dir():
+            _log(f"[Warning] '{root_path}' is not a directory. Skipping.", log_callback)
+            continue
+        valid_dirs.append(root_path)
+    
+    if not valid_dirs:
+        _log("[Error] No valid directories to sync.", log_callback)
         return
     
     base_dir = os.path.dirname(os.path.abspath(__file__))
     insights_dir = pathlib.Path(base_dir) / "saved_insights"
 
-    if not root_path.is_dir():
-        print(f"[Error] '{root_path}' needs to be a folder.")
-        return
-
-    _log(f"Starting sync for directory: {root_path}", log_callback)
+    _log(f"Starting sync for {len(valid_dirs)} director{'ies' if len(valid_dirs) > 1 else 'y'}:", log_callback)
+    for dir_path in valid_dirs:
+        _log(f"  - {dir_path}", log_callback)
     _log("(This may take a while. A few glitches are to be expected. Don't move any files while syncing.)", log_callback)
     start_time = time.perf_counter()
 
     local_files = {}
-    for p in root_path.rglob('*'):  # This processes files sort of at random, but it does get to every one.
-        if p.is_file():
-            local_files[str(p)] = p.stat().st_mtime
+    # Scan all target directories
+    for root_path in valid_dirs:
+        _log(f"Scanning directory: {root_path}", log_callback)
+        for p in root_path.rglob('*'):
+            if p.is_file():
+                local_files[str(p)] = p.stat().st_mtime
 
+    # Include saved insights
     if insights_dir.exists():
         for p in insights_dir.rglob('*'):
             if p.is_file():
@@ -563,7 +591,7 @@ def sync_directory(drive_service, text_splitter, models, collections, config, ca
     else:
         _log(f"No saved insights folder found at: {insights_dir}", log_callback)
 
-    _log(f"Total number of files in directory + insights folder: {len(local_files)}", log_callback)
+    _log(f"Total number of files found: {len(local_files)}", log_callback)
 
     db_files = {}
     # Iterate over each collection (e.g., 'text', 'image') in the dictionary

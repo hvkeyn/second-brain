@@ -19,6 +19,7 @@ https://github.com/user-attachments/assets/38dd0998-328a-4164-8b5e-9ec1a52dcb84
 
 ## Features
 
+- **Multi-directory support**: Sync and search across multiple directories simultaneously
 - Semantic search: searches based on deep semantic meaning.
 - Lexical search: finds a needle in a haystack using keywords.
 - Supported files: .txt, .pdf, .docx, .gdoc, .png, .jpg, .jpeg, .gif, .webp  
@@ -140,7 +141,29 @@ python SecondBrainFrontend.py
 ```
 
 ### 4. Configuration
-Open ```config.json``` and update the <mark>target_directory</mark> to point to the folder you want to use as your knowledge base.
+Open ```config.json``` and update the <mark>target_directories</mark> array to point to the folder(s) you want to use as your knowledge base.
+
+You can specify **one or multiple directories**:
+
+**Single directory:**
+```json
+"target_directories": [
+    "C:\\Users\\user\\Documents\\MyNotes"
+]
+```
+
+**Multiple directories:**
+```json
+"target_directories": [
+    "C:\\Users\\user\\Documents\\MyNotes",
+    "C:\\Users\\user\\My Drive",
+    "D:\\Projects\\Documentation"
+]
+```
+
+All specified directories will be scanned and synced together into a unified searchable knowledge base.
+
+**Note:** The old `target_directory` (singular) format is still supported for backward compatibility.
 
 (Optional - skip if irrelevant) To enable Google Doc syncing, follow the [Google Cloud API](https://developers.google.com/workspace/drive/api/guides/about-sdk) instructions to get a ```credentials.json``` file using OAuth. Either place the file in the project directory, or place it somewhere else and update <mark>credentials_path</mark> in ```config.json``` to point to it. The first time you sync, a browser window will open for you to authorize the application. Authentication is very finnicky and it might be necessary to delete the authorization token (```token.json```) and then reauthorize to get Drive syncing to work. You can do this with the "Reauthorize Drive" button.
 
@@ -172,7 +195,7 @@ config.json
 | Parameter Name | Function | Range | Default |
 | ----- | ----- | ----- | ----- |
 | credentials\_path | Path to credentials.json which is used to authenticate Google Drive downloads. By default it will look in the same folder as SecondBrainFrontend.py | Any path | "credentials.json" |
-| target\_directory | Which directory to sync to. Embeds all valid files in the directory. | Any directory | "C:\\\\Users\\\\user\\\\My Drive" |
+| target\_directories | Array of directories to sync. Embeds all valid files from all specified directories into a unified searchable knowledge base. Supports both single and multiple directories. Old single `target_directory` format is supported for backward compatibility. | Array of directory paths | ["C:\\\\Users\\\\user\\\\My Drive"] |
 | text\_model\_name | SentenceTransformers text embedding model name. "BAAI/bge-m3", "BAAI/bge-large-en-v1.5", and "BAAI/bge-small-en-v1.5" work well, with the small version using fewer system resources, and m3 using the most. Also, BAAI/bge-m3 is multilingual. If you change the text model name, you need to remake all of your embeddings with that model - delete the chroma_db folder or use the helper function at the bottom of SecondBrainBackend. | Any valid name | "BAAI/bge-large-en-v1.5" |
 | image\_model\_name | SentenceTransformers image embedding model name. "clip-ViT-L-14", "clip-ViT-B-16", and "clip-ViT-B-32" work well, with the 32 version using fewer system resources, and L-14 using the most. If you change the image model name, you need to remake all of your embeddings with that model. | Any valid name | "clip-ViT-B-16" |
 | embed\_use\_cuda | Turning this to false forces the embedding models to use CPU. If set to true, uses CUDA if possible. I recommend using CUDA for syncing, but CPU is more than enough for individual searches, which means you can allocate more VRAM for a local model if desired. | true or false | true |
